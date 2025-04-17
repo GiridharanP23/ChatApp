@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-exaw!0!-prhi%0f-w-*b7%t3^k&39q#-094om!lve@tuh36!82
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['whatsup.com']
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
 
 # Application definition
