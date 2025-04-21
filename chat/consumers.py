@@ -5,6 +5,8 @@ import os
 import django
 from channels.db import database_sync_to_async
 from django.core.paginator import Paginator
+from django.utils import timezone
+
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Whatsapp1.settings')
 django.setup()
 import redis
@@ -73,6 +75,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.send_direct_message(message)
 
     async def send_group_message(self, message):
+        # Save the group message to the database
+        await self.save_group_message_to_db(message)
+
         # Broadcast message to the group room
         await self.channel_layer.group_send(
             self.room_name,
@@ -84,7 +89,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         )
 
     async def send_direct_message(self, message):
-        # Send the message to the recipient only
+        # Save the direct message to the database
+        await self.save_message_to_db(message)
+
+        # Send the message to the recipient
         recipient_channel = f"dm_{min(self.user_id, self.recipient_id)}_{max(self.user_id, self.recipient_id)}"
         await self.channel_layer.group_send(
             recipient_channel,
@@ -94,6 +102,48 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'sender': self.user_id
             }
         )
+
+    @database_sync_to_async
+    def save_group_message_to_db(self, message):
+        try:
+            # Get the sender, group, and tenant
+            sender = User.objects.get(id=self.user_id)
+            group = Group.objects.get(id=self.group_id)
+            tenant = Tenant.objects.get(id=self.tenant_id)
+
+            # Create and save the group message
+            Message.objects.create(
+                tenant=tenant,
+                sender=sender,
+                group=group,
+                content=message,
+                created_at=timezone.now(),
+                is_read=False  # Set default to False when the message is sent
+            )
+        except (User.DoesNotExist, Tenant.DoesNotExist, Group.DoesNotExist) as e:
+            print(f"Error saving group message: {e}")
+            pass
+
+    @database_sync_to_async
+    def save_message_to_db(self, message):
+        try:
+            # Get the sender, recipient, and tenant
+            sender = User.objects.get(id=self.user_id)
+            recipient = User.objects.get(id=self.recipient_id)
+            tenant = Tenant.objects.get(id=self.tenant_id)
+
+            # Create and save the message
+            Message.objects.create(
+                tenant=tenant,
+                sender=sender,
+                recipient=recipient,
+                content=message,
+                created_at=timezone.now(),
+                is_read=False  # Set default to False when the message is sent
+            )
+        except (User.DoesNotExist, Tenant.DoesNotExist) as e:
+            print(f"Error saving message: {e}")
+            pass
 
     async def chat_message(self, event):
         # Send the message to the WebSocket
