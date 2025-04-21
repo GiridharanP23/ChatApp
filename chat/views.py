@@ -96,19 +96,42 @@ class GroupCreateView(APIView):
 class MessagePagination(PageNumberPagination):
     page_size = 5
 
+
 class ChatMessageHistoryAPIView(APIView):
     def get(self, request, tenant_id, user_1_id, user_2_id):
-        messages = Message.objects.filter(
-            tenant_id=tenant_id,
-            user_1_id=user_1_id,
-            user_2_id=user_2_id
-        ).order_by('-created_at')
+        try:
+            # Fetch messages between the two users (either direct or group messages)
+            messages = Message.objects.filter(
+                tenant_id=tenant_id,
+                # For direct messages
+                recipient_id__in=[user_1_id, user_2_id],
+                sender_id__in=[user_1_id, user_2_id]
+            ).order_by('-created_at')
 
-        paginator = MessagePagination()
-        page = paginator.paginate_queryset(messages, request)
-        serializer = MessageSerializer(page, many=True)
+            # Add group message filtering (messages in groups that include the users)
+            group_messages = Message.objects.filter(
+                tenant_id=tenant_id,
+                group__members__in=[user_1_id, user_2_id]
+            ).order_by('-created_at')
 
-        return paginator.get_paginated_response(serializer.data)
+            # Combine both sets of messages and remove duplicates (if any)
+            messages = messages | group_messages  # Union of both querysets
+            messages = messages.distinct()  # Remove duplicates if any exist
+
+            # Handle pagination
+            paginator = MessagePagination()
+            page = paginator.paginate_queryset(messages, request)
+            serializer = MessageSerializer(page, many=True)
+
+            # Return the paginated response
+            return paginator.get_paginated_response(serializer.data)
+
+        except Message.DoesNotExist:
+            # Return a 404 if no messages are found for the given users
+            return Response({"detail": "Messages not found."}, status=404)
+        except Exception as e:
+            # Handle any unexpected errors
+            return Response({"detail": str(e)}, status=500)
 
 
 class GroupChatHistoryAPIView(APIView):
@@ -123,15 +146,14 @@ class GroupChatHistoryAPIView(APIView):
         # Retrieve all messages for this group, ordered by creation time (newest first)
         messages = Message.objects.filter(group=group).order_by('-created_at')
 
-        # Paginate the queryset
+        # Handle pagination
         paginator = MessagePagination()
         page = paginator.paginate_queryset(messages, request)
-        if page is not None:
-            # Serialize the paginated messages
+
+        if page:
             serializer = MessageSerializer(page, many=True)
             return paginator.get_paginated_response(serializer.data)
 
-        # Fallback if pagination is not needed
+        # If no pagination is needed, return all messages
         serializer = MessageSerializer(messages, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-

@@ -10,7 +10,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Whatsapp1.settings')  # Replace
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),  # For handling HTTP requests
-    "websocket": SessionMiddlewareStack(  # Use SessionMiddlewareStack for session handling
+    "websocket": AuthMiddlewareStack(
         URLRouter(chat.routing.websocket_urlpatterns)
     ),
 })
