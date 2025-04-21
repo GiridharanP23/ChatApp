@@ -6,7 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Tenant, Message
+from .models import Tenant, Message, Group
 from .serializers import TenantSerializer, UserSerializer, GroupSerializer,MessageSerializer
 
 
@@ -109,4 +109,29 @@ class ChatMessageHistoryAPIView(APIView):
         serializer = MessageSerializer(page, many=True)
 
         return paginator.get_paginated_response(serializer.data)
+
+
+class GroupChatHistoryAPIView(APIView):
+    def get(self, request, tenant_id, group_id):
+        try:
+            # Retrieve the tenant and group based on provided IDs
+            tenant = Tenant.objects.get(id=tenant_id)
+            group = Group.objects.get(id=group_id, tenant=tenant)
+        except (Tenant.DoesNotExist, Group.DoesNotExist):
+            return Response({"detail": "Tenant or Group not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Retrieve all messages for this group, ordered by creation time (newest first)
+        messages = Message.objects.filter(group=group).order_by('-created_at')
+
+        # Paginate the queryset
+        paginator = MessagePagination()
+        page = paginator.paginate_queryset(messages, request)
+        if page is not None:
+            # Serialize the paginated messages
+            serializer = MessageSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        # Fallback if pagination is not needed
+        serializer = MessageSerializer(messages, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
