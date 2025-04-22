@@ -34,21 +34,22 @@ class TenantRegisterView(APIView):
 # User Registration View (also creates tenant association)
 class UserRegisterView(APIView):
     def post(self, request, *args, **kwargs):
-        tenant_data = request.data.get('tenant')
+        tenant_id = request.data.get('tenant_id')
+        if not tenant_id:
+            return Response({'error': 'tenant_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        tenant_serializer = TenantSerializer(data=tenant_data)
-        if tenant_serializer.is_valid():
-            tenant = tenant_serializer.save()
-        else:
-            return Response(tenant_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            tenant = Tenant.objects.get(id=tenant_id)
+        except Tenant.DoesNotExist:
+            return Response({'error': 'Tenant not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        user_data = request.data.get('user')
+        # Exclude tenant_id from user serializer data
+        user_data = {k: v for k, v in request.data.items() if k != 'tenant_id'}
 
         user_serializer = UserSerializer(data=user_data)
         if user_serializer.is_valid():
             user = user_serializer.save()
-            user_profile = Profile.objects.create(user=user, tenant=tenant)
-            user.save()
+            Profile.objects.create(user=user, tenant=tenant)
         else:
             return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -57,7 +58,6 @@ class UserRegisterView(APIView):
             'tenant': tenant.name,
             'user': user.username
         }, status=status.HTTP_201_CREATED)
-
 
 # Group Creation View
 class GroupCreateView(APIView):

@@ -81,6 +81,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         else:
             message_obj = await self.save_direct_message(message)
 
+        if not message_obj:
+            await self.send(text_data=json.dumps({
+                'error': 'Failed to save message'
+            }))
+            return
+
         await self.channel_layer.group_send(
             self.room_name,
             {
