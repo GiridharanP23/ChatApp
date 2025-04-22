@@ -32,7 +32,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.tenant_id = self.scope['url_route']['kwargs']['tenant_id']
 
-        # Extract user_id from query string
         query_string = self.scope['query_string'].decode()
         query_params = parse_qs(query_string)
         self.user_id = query_params.get('user_id', [None])[0]
@@ -42,6 +41,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         self.user_id = int(self.user_id)
+        self.user = await self.get_user(self.user_id)
 
         self.is_group_chat = 'group_id' in self.scope['url_route']['kwargs']
         if self.is_group_chat:
@@ -58,8 +58,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.room_name, self.channel_name)
         await self.accept()
 
+        # 🔹 Mark all messages as read in direct message room after connecting
+        if not self.is_group_chat:
+            await self.mark_all_dm_messages_as_read()
+
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(self.room_name, self.channel_name)
+
+    @database_sync_to_async
+    def get_user(self, user_id):
+        return User.objects.get(id=user_id)
 
     async def receive(self, text_data):
         data = json.loads(text_data)
@@ -69,24 +77,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         if self.is_group_chat:
-            await self.save_group_message(message)
+            message_obj = await self.save_group_message(message)
         else:
-            await self.save_direct_message(message)
+            message_obj = await self.save_direct_message(message)
 
         await self.channel_layer.group_send(
             self.room_name,
             {
                 'type': 'chat_message',
                 'message': message,
-                'sender_id': self.user_id
+                'sender_id': self.user_id,
+                'message_id': message_obj.id,
             }
         )
 
     async def chat_message(self, event):
         await self.send(text_data=json.dumps({
             'message': event['message'],
-            'sender': event['sender_id']
+            'sender_id': event['sender_id'],
+            'message_id': event['message_id']
         }))
+        if self.user.id != event['sender_id']:
+            await self.mark_message_as_read(event['message_id'])
 
     @database_sync_to_async
     def save_group_message(self, content):
@@ -94,10 +106,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             sender = User.objects.get(id=self.user_id)
             tenant = Tenant.objects.get(id=self.tenant_id)
             group = Group.objects.get(id=self.group_id, tenant=tenant)
-
             room = Room.objects.get(tenant=tenant, group=group, room_type='group')
 
-            Message.objects.create(
+            return Message.objects.create(
                 tenant=tenant,
                 sender=sender,
                 room=room,
@@ -106,7 +117,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 created_at=timezone.now()
             )
         except Exception as e:
-            print(f"Error saving group message: {e}")
+            logger.error(f"Error saving group message: {e}")
+            return None
 
     @database_sync_to_async
     def save_direct_message(self, content):
@@ -115,7 +127,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             recipient = User.objects.get(id=self.recipient_id)
             tenant = Tenant.objects.get(id=self.tenant_id)
 
-            # Create or get DM room (same two users regardless of order)
             room_name = f"dm_{min(sender.id, recipient.id)}_{max(sender.id, recipient.id)}"
             room, created = Room.objects.get_or_create(
                 tenant=tenant,
@@ -124,7 +135,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             room.participants.set([sender, recipient])
 
-            Message.objects.create(
+            return Message.objects.create(
                 tenant=tenant,
                 sender=sender,
                 room=room,
@@ -133,4 +144,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 created_at=timezone.now()
             )
         except Exception as e:
-            print(f"Error saving direct message: {e}")
+            logger.error(f"Error saving direct message: {e}")
+            return None
+
+    @database_sync_to_async
+    def mark_message_as_read(self, message_id):
+        Message.objects.filter(id=message_id).update(is_read=True)
+
+    @database_sync_to_async
+    def mark_all_dm_messages_as_read(self):
+        try:
+            tenant = Tenant.objects.get(id=self.tenant_id)
+            room_name = f"dm_{min(self.user_id, self.recipient_id)}_{max(self.user_id, self.recipient_id)}"
+            room = Room.objects.get(name=room_name, tenant=tenant, room_type='dm')
+
+            Message.objects.filter(
+                room=room,
+                is_read=False,
+                sender_id=self.recipient_id  # Only mark messages *from* the recipient as read
+            ).update(is_read=True)
+        except Exception as e:
+            logger.error(f"Error marking messages as read on connect: {e}")
