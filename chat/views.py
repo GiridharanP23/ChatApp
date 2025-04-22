@@ -95,26 +95,31 @@ class MessagePagination(PageNumberPagination):
     page_size = 5
 
 
-# Chat History for Direct Messages between Two Users
 class ChatMessageHistoryAPIView(APIView):
     def get(self, request, tenant_id, user_1_id, user_2_id):
         try:
-            # Get rooms for the two users (Direct Messages)
-            rooms = Room.objects.filter(
+            # Ensure consistent room naming with tenant id
+            room_name = f"dm_{tenant_id}_{min(user_1_id, user_2_id)}_{max(user_1_id, user_2_id)}"
+
+            # Try to fetch the room by name and tenant
+            room = Room.objects.filter(
                 tenant_id=tenant_id,
                 room_type='dm',
-                participants__in=[user_1_id, user_2_id]
-            )
+                name=room_name
+            ).first()
 
-            if not rooms.exists():
-                return Response({"detail": "No direct message room found for these users."}, status=status.HTTP_404_NOT_FOUND)
+            if not room:
+                return Response(
+                    {"detail": "No direct message room found for these users."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-            room = rooms.first()  # Assuming there is only one room for direct messages between users
-
+            # Retrieve messages for the room
             messages = Message.objects.filter(
                 room=room
             ).order_by('-created_at')
 
+            # Paginate and serialize
             paginator = MessagePagination()
             page = paginator.paginate_queryset(messages, request)
             serializer = MessageSerializer(page, many=True)
@@ -122,7 +127,7 @@ class ChatMessageHistoryAPIView(APIView):
             return paginator.get_paginated_response(serializer.data)
 
         except Exception as e:
-            return Response({"detail": str(e)}, status=500)
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # Chat History for Group Messages
