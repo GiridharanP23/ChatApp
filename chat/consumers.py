@@ -53,7 +53,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.close()
                 return
             self.recipient_id = int(self.recipient_id)
-            self.room_name = f"dm_{min(self.user_id, self.recipient_id)}_{max(self.user_id, self.recipient_id)}"
+            self.room_name = f"dm_{self.tenant_id}_{min(self.user_id, self.recipient_id)}_{max(self.user_id, self.recipient_id)}"
 
         await self.channel_layer.group_add(self.room_name, self.channel_name)
         await self.accept()
@@ -133,7 +133,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             recipient = User.objects.get(id=self.recipient_id)
             tenant = Tenant.objects.get(id=self.tenant_id)
 
-            room_name = f"dm_{min(sender.id, recipient.id)}_{max(sender.id, recipient.id)}"
+            room_name = f"dm_{self.tenant_id}_{min(sender.id, recipient.id)}_{max(sender.id, recipient.id)}"
             room, created = Room.objects.get_or_create(
                 tenant=tenant,
                 room_type='dm',
@@ -161,7 +161,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     def mark_all_dm_messages_as_read(self):
         try:
             tenant = Tenant.objects.get(id=self.tenant_id)
-            room_name = f"dm_{min(self.user_id, self.recipient_id)}_{max(self.user_id, self.recipient_id)}"
+            room_name = f"dm_{self.tenant_id}_{min(self.user_id, self.recipient_id)}_{max(self.user_id, self.recipient_id)}"
             room = Room.objects.get(name=room_name, tenant=tenant, room_type='dm')
 
             Message.objects.filter(
