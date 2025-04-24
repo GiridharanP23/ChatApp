@@ -14,7 +14,7 @@ import redis
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import User
 
-from chat.models import Tenant, Message, Group, Room
+from chat.models import Tenant, Message, Group, Room, Profile
 
 redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 active_users = {}
@@ -30,8 +30,6 @@ User = get_user_model()
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        self.tenant_id = self.scope['url_route']['kwargs']['tenant_id']
-
         query_string = self.scope['query_string'].decode()
         query_params = parse_qs(query_string)
         self.user_id = query_params.get('user_id', [None])[0]
@@ -42,6 +40,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         self.user_id = int(self.user_id)
         self.user = await self.get_user(self.user_id)
+        self.tenant = await self.get_user_tenant(self.user)
+        self.tenant_id = self.tenant.id
 
         self.is_group_chat = 'group_id' in self.scope['url_route']['kwargs']
         if self.is_group_chat:
@@ -53,14 +53,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.close()
                 return
             self.recipient_id = int(self.recipient_id)
+
+            # Ensure that the sender and recipient belong to the same tenant
+            recipient = await self.get_user(self.recipient_id)
+            if not await self.users_belong_to_same_tenant(self.user, recipient):
+                await self.close()
+                return
+
             self.room_name = f"dm_{self.tenant_id}_{min(self.user_id, self.recipient_id)}_{max(self.user_id, self.recipient_id)}"
 
         await self.channel_layer.group_add(self.room_name, self.channel_name)
         await self.accept()
 
-        # 🔹 Mark all messages as read in direct message room after connecting
         if not self.is_group_chat:
             await self.mark_all_dm_messages_as_read()
+
+    @database_sync_to_async
+    def get_user_tenant(self, user):
+        return user.profile.tenant
 
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(self.room_name, self.channel_name)
@@ -68,6 +78,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def get_user(self, user_id):
         return User.objects.get(id=user_id)
+
+    @database_sync_to_async
+    def users_belong_to_same_tenant(self, user1, user2):
+        try:
+            return user1.profile.tenant_id == user2.profile.tenant_id
+        except Profile.DoesNotExist:
+            return False
 
     async def receive(self, text_data):
         data = json.loads(text_data)
@@ -167,7 +184,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             Message.objects.filter(
                 room=room,
                 is_read=False,
-                sender_id=self.recipient_id  # Only mark messages *from* the recipient as read
+                sender_id=self.recipient_id
             ).update(is_read=True)
         except Exception as e:
             logger.error(f"Error marking messages as read on connect: {e}")
