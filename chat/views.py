@@ -59,13 +59,26 @@ class UserRegisterView(APIView):
             'user': user.username
         }, status=status.HTTP_201_CREATED)
 
+
 # Group Creation View
 class GroupCreateView(APIView):
     def post(self, request):
+        tenant_id = request.data.get('tenant_id')
+        if not tenant_id:
+            return Response({'error': 'tenant_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tenant = Tenant.objects.get(id=tenant_id)
+        except Tenant.DoesNotExist:
+            return Response({'error': 'Tenant not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Ensure tenant is included in validated data when saving
+        request.data['tenant'] = tenant.id  # Manually add tenant ID to request data
+
         serializer = GroupSerializer(data=request.data)
 
         if serializer.is_valid():
-            group = serializer.save()
+            group = serializer.save()  # Tenant is automatically handled by serializer
 
             user_ids = request.data.get('members', [])
             users = User.objects.filter(id__in=user_ids)
@@ -73,17 +86,17 @@ class GroupCreateView(APIView):
 
             # Create and link the Room to the Group
             room = Room.objects.create(
-                tenant=group.tenant,
+                tenant=tenant,
                 room_type='group',
                 group=group,
-                name=f"group_{group.tenant.id}_{group.id}"
+                name=f"group_{tenant.id}_{group.id}"
             )
             room.participants.set(users)
 
             return Response({
                 "id": group.id,
                 "name": group.name,
-                "tenant": group.tenant.id,
+                "tenant": tenant.id,
                 "members": [user.id for user in group.members.all()],
                 "room_id": room.id
             }, status=status.HTTP_201_CREATED)
@@ -95,6 +108,7 @@ class MessagePagination(PageNumberPagination):
     page_size = 5
 
 
+# Chat Message History for Direct Messages
 class ChatMessageHistoryAPIView(APIView):
     def get(self, request, tenant_id, user_1_id, user_2_id):
         try:
@@ -130,7 +144,6 @@ class ChatMessageHistoryAPIView(APIView):
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-# Chat History for Group Messages
 class GroupChatHistoryAPIView(APIView):
     def get(self, request, tenant_id, group_id):
         try:
